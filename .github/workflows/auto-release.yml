@@ -86,13 +86,24 @@ jobs:
         if: steps.version_check.outputs.should_build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full bc curl unzip
+          sudo apt-get install -y p7zip-full bc curl unzip rsync
           
-          # 安装官方 QDK
+          # 下载并安装官方 QDK 环境
           wget -q https://github.com/qnap-dev/QDK/archive/refs/tags/v2.3.14.tar.gz
           tar -xzf v2.3.14.tar.gz
-          sudo cp -r QDK-2.3.14/bin/* /usr/bin/
-          sudo cp -r QDK-2.3.14/template /usr/share/qdk
+          
+          # 官方 QDK 核心文件位于解压后的 shared 目录
+          sudo mkdir -p /usr/share/QDK /etc/config
+          sudo cp -rf QDK-2.3.14/shared/* /usr/share/QDK/
+          sudo chmod +x /usr/share/QDK/bin/*
+          sudo ln -sf /usr/share/QDK/bin/qbuild /usr/local/bin/qbuild
+          
+          # 配置 QDK 路径
+          sudo cp /usr/share/QDK/qdk.conf /etc/config/qdk.conf
+          sudo sed -i 's|^QDK_PATH_P=.*|QDK_PATH_P=/usr/share|' /etc/config/qdk.conf
+          sudo sed -i 's|^QDK_PATH=.*|QDK_PATH=/usr/share/QDK|' /etc/config/qdk.conf
+          
+          qbuild --version || true
 
       - name: Download Target Binaries & Update Configs
         if: steps.version_check.outputs.should_build == 'true'
@@ -117,29 +128,32 @@ jobs:
           
           # 1. 构建 x86_64 架构包
           echo "Building x86_64 package (v${TARGET_VER})..."
-          rm -rf build
-          mkdir -p build/x86_64 build/icons build/shared
-          cp -r package_routines qpkg.cfg build/
-          cp -r icons/* build/icons/
-          cp -r shared/* build/shared/
-          cp x86_64/easytier-core x86_64/easytier-cli build/x86_64/
+          rm -rf build_pkg
+          mkdir -p build_pkg/x86_64 build_pkg/icons build_pkg/shared
+          cp -r package_routines qpkg.cfg build_pkg/
+          cp -r icons/* build_pkg/icons/
+          cp -r shared/* build_pkg/shared/
+          cp x86_64/easytier-core x86_64/easytier-cli build_pkg/x86_64/
           
-          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build/qpkg.cfg
-          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build/qpkg.cfg
-          (cd build && qbuild --root . --output-dir ../release)
+          chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/x86_64/* || true
+          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build_pkg/qpkg.cfg
+          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
+          (cd build_pkg && qbuild --root . --output-dir ../release)
           
           # 2. 构建 arm_64 架构包
           echo "Building arm_64 package (v${TARGET_VER})..."
-          rm -rf build
-          mkdir -p build/arm_64 build/icons build/shared
-          cp -r package_routines qpkg.cfg build/
-          cp -r icons/* build/icons/
-          cp -r shared/* build/shared/
-          cp arm_64/easytier-core arm_64/easytier-cli build/arm_64/
+          rm -rf build_pkg
+          mkdir -p build_pkg/arm_64 build_pkg/icons build_pkg/shared
+          cp -r package_routines qpkg.cfg build_pkg/
+          cp -r icons/* build_pkg/icons/
+          cp -r shared/* build_pkg/shared/
+          cp arm_64/easytier-core arm_64/easytier-cli build_pkg/arm_64/
           
-          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build/qpkg.cfg
-          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build/qpkg.cfg
-          (cd build && qbuild --root . --output-dir ../release)
+          chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/arm_64/* || true
+          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build_pkg/qpkg.cfg
+          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
+          (cd build_pkg && qbuild --root . --output-dir ../release)
+          rm -rf build_pkg
 
           # 3. 计算 MD5 校验和
           cd release
