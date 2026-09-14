@@ -1,0 +1,23 @@
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*~
+
+# Virtualenv
+venv/
+.venv/
+scripts/venv/
+__pycache__/
+*.pyc
+
+# QNAP build output & local logs
+*.qpkg
+shared/easytier.log
+shared/configs/state.json
+dev-test/
+build/
+output/
+release/
+example/
+

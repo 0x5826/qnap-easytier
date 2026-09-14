@@ -1,0 +1,98 @@
+######################################################################
+# Package specific operations that shall be performed when
+# the package is removed.
+######################################################################
+
+PKG_MAIN_REMOVE="{
+	rm -f /usr/sbin/easytier-cli
+	rm -f /usr/bin/easytier-cli
+	rm -f /usr/sbin/easytier-core
+	rm -f /usr/bin/easytier-core
+	# all identity and config files are stored in the Install_Path and will be removed automatically
+}"
+
+######################################################################
+# Package specific initialization that shall be performed
+# before the package is installed.
+######################################################################
+
+pkg_init()
+{
+	modprobe tun >/dev/null 2>&1
+	if [ ! -c /dev/net/tun ]; then
+		mkdir -p /dev/net
+		mknod /dev/net/tun c 10 200 2>/dev/null
+	fi
+	chmod 666 /dev/net/tun 2>/dev/null
+
+	# 升级保护：检测若已存在旧版本配置，执行原子热备份
+	local cur_path=""
+	if [ -x "/sbin/getcfg" ]; then
+		cur_path=$(/sbin/getcfg easytier Install_Path -f /etc/config/qpkg.conf 2>/dev/null)
+	fi
+	if [ -z "$cur_path" ] || [ ! -d "$cur_path" ]; then
+		cur_path="$SYS_QPKG_DIR"
+	fi
+	if [ -z "$cur_path" ] || [ ! -d "$cur_path" ]; then
+		for p in /share/CACHEDEV1_DATA/.qpkg/easytier /share/MD0_DATA/.qpkg/easytier /share/HDA_DATA/.qpkg/easytier; do
+			if [ -d "$p" ]; then
+				cur_path="$p"
+				break
+			fi
+		done
+	fi
+
+	rm -rf /tmp/.easytier_upgrade_backup 2>/dev/null
+	if [ -n "$cur_path" ] && [ -d "$cur_path/configs" ]; then
+		if [ -f "$cur_path/configs/easytier.conf" ] || [ -f "$cur_path/configs/easytier.toml" ]; then
+			mkdir -p /tmp/.easytier_upgrade_backup
+			cp -rf "$cur_path/configs/"* /tmp/.easytier_upgrade_backup/ 2>/dev/null
+		fi
+	fi
+}
+
+pkg_post_install()
+{
+	local target_path="$SYS_QPKG_DIR"
+	if [ -z "$target_path" ] || [ ! -d "$target_path" ]; then
+		if [ -x "/sbin/getcfg" ]; then
+			target_path=$(/sbin/getcfg easytier Install_Path -f /etc/config/qpkg.conf 2>/dev/null)
+		fi
+	fi
+
+	# 1. 优先还原用户热备份的配置，确保覆盖升级 100% 保持原有网络参数
+	if [ -d "/tmp/.easytier_upgrade_backup" ]; then
+		if [ -f "/tmp/.easytier_upgrade_backup/easytier.conf" ] || [ -f "/tmp/.easytier_upgrade_backup/easytier.toml" ]; then
+			mkdir -p "$target_path/configs"
+			cp -rf /tmp/.easytier_upgrade_backup/* "$target_path/configs/" 2>/dev/null
+		fi
+		rm -rf /tmp/.easytier_upgrade_backup 2>/dev/null
+	fi
+
+	# 2. 若无备份（全新安装），且尚未生成正式配置，从 .default 模板初始化
+	if [ -d "$target_path/configs" ]; then
+		if [ ! -f "$target_path/configs/easytier.conf" ] && [ -f "$target_path/configs/easytier.conf.default" ]; then
+			cp -f "$target_path/configs/easytier.conf.default" "$target_path/configs/easytier.conf"
+		fi
+		if [ ! -f "$target_path/configs/easytier.toml" ] && [ -f "$target_path/configs/easytier.toml.default" ]; then
+			cp -f "$target_path/configs/easytier.toml.default" "$target_path/configs/easytier.toml"
+		fi
+		chmod -Rf 777 "$target_path/configs" 2>/dev/null
+	fi
+
+	# 3. 将 EasyTier 官方高清无黑边图标强制刷新至 QTS 桌面与 App Center 图标库
+	local icon_src="$target_path/icons"
+	[ ! -d "$icon_src" ] && icon_src="$target_path/shared/icons"
+	if [ -d "$icon_src" ]; then
+		for sys_icon_dir in /home/httpd/RSS/images /home/httpd/cgi-bin/images /home/httpd/v3_images; do
+			if [ -d "$sys_icon_dir" ]; then
+				cp -f "$icon_src"/* "$sys_icon_dir/" 2>/dev/null
+			fi
+		done
+		touch /etc/config/qpkg.conf 2>/dev/null
+	fi
+
+	chmod u+s "$target_path/x86_64/easytier-core" 2>/dev/null
+	chmod u+s "$target_path/arm_64/easytier-core" 2>/dev/null
+	chmod u+s "$target_path/easytier-core" 2>/dev/null
+}

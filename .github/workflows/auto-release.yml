@@ -1,0 +1,193 @@
+name: Auto Check & Release EasyTier QPKG
+
+on:
+  schedule:
+    # 每周一 UTC 00:00 (北京时间早 08:00) 定期自动检查
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: '指定构建版本（留空则自动检测官方最新 Release，例如 2.6.4）'
+        required: false
+        default: ''
+      force_build:
+        description: '是否强制重新构建（即使版本已存在）'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-build:
+    name: Check Upstream & Build QPKG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect Versions
+        id: version_check
+        run: |
+          set -e
+          
+          # 1. 获取当前仓库本地版本
+          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '0.0.0')"
+          LOCAL_VER="${LOCAL_VER#v}"
+          echo "本地仓库版本: $LOCAL_VER"
+          
+          # 2. 判断目标版本
+          INPUT_VER="${{ github.event.inputs.target_version }}"
+          FORCE_BUILD="${{ github.event.inputs.force_build }}"
+          TAG_REF="${{ github.ref_name }}"
+          
+          if [[ "${{ github.event_name }}" == "push" && "$TAG_REF" =~ ^v[0-9] ]]; then
+            TARGET_VER="${TAG_REF#v}"
+            SHOULD_BUILD="true"
+            echo "触发方式: Tag 推送 ($TAG_REF)"
+          elif [ -n "$INPUT_VER" ]; then
+            TARGET_VER="${INPUT_VER#v}"
+            SHOULD_BUILD="true"
+            echo "触发方式: 手动指定版本 ($TARGET_VER)"
+          else
+            echo "正在查询 EasyTier 官方最新 Release..."
+            UPSTREAM_TAG=$(curl -sSL "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4 || true)
+            if [ -z "$UPSTREAM_TAG" ]; then
+              echo "警告: 无法通过 API 获取官方最新 tag，使用当前本地版本"
+              TARGET_VER="$LOCAL_VER"
+            else
+              TARGET_VER="${UPSTREAM_TAG#v}"
+            fi
+            echo "官方最新版本: $TARGET_VER"
+            
+            if [ "$FORCE_BUILD" = "true" ]; then
+              SHOULD_BUILD="true"
+              echo "启用强制构建模式"
+            elif [ "$TARGET_VER" != "$LOCAL_VER" ]; then
+              SHOULD_BUILD="true"
+              echo "检测到官方新版本: $TARGET_VER (本地: $LOCAL_VER)，启动自动构建发布"
+            else
+              SHOULD_BUILD="false"
+              echo "当前已是官方最新版本 ($LOCAL_VER)，无需构建"
+            fi
+          fi
+          
+          echo "target_version=$TARGET_VER" >> $GITHUB_OUTPUT
+          echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
+
+      - name: Setup QDK Build Environment
+        if: steps.version_check.outputs.should_build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full bc curl unzip
+          
+          # 安装官方 QDK
+          wget -q https://github.com/qnap-dev/QDK/archive/refs/tags/v2.3.14.tar.gz
+          tar -xzf v2.3.14.tar.gz
+          sudo cp -r QDK-2.3.14/bin/* /usr/bin/
+          sudo cp -r QDK-2.3.14/template /usr/share/qdk
+
+      - name: Download Target Binaries & Update Configs
+        if: steps.version_check.outputs.should_build == 'true'
+        run: |
+          TARGET_VER="${{ steps.version_check.outputs.target_version }}"
+          echo "正在拉取 EasyTier v${TARGET_VER} 双架构静态二进制..."
+          
+          # 执行下载脚本
+          chmod +x scripts/download_binaries.sh
+          ./scripts/download_binaries.sh "${TARGET_VER}"
+          
+          # 更新仓库内的版本号
+          echo "${TARGET_VER}" > shared/version
+          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" qpkg.cfg
+
+      - name: Build QPKG Packages
+        if: steps.version_check.outputs.should_build == 'true'
+        run: |
+          TARGET_VER="${{ steps.version_check.outputs.target_version }}"
+          mkdir -p release
+          rm -f release/*.qpkg release/*.md5
+          
+          # 1. 构建 x86_64 架构包
+          echo "Building x86_64 package (v${TARGET_VER})..."
+          rm -rf build
+          mkdir -p build/x86_64 build/icons build/shared
+          cp -r package_routines qpkg.cfg build/
+          cp -r icons/* build/icons/
+          cp -r shared/* build/shared/
+          cp x86_64/easytier-core x86_64/easytier-cli build/x86_64/
+          
+          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build/qpkg.cfg
+          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build/qpkg.cfg
+          (cd build && qbuild --root . --output-dir ../release)
+          
+          # 2. 构建 arm_64 架构包
+          echo "Building arm_64 package (v${TARGET_VER})..."
+          rm -rf build
+          mkdir -p build/arm_64 build/icons build/shared
+          cp -r package_routines qpkg.cfg build/
+          cp -r icons/* build/icons/
+          cp -r shared/* build/shared/
+          cp arm_64/easytier-core arm_64/easytier-cli build/arm_64/
+          
+          sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build/qpkg.cfg
+          sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build/qpkg.cfg
+          (cd build && qbuild --root . --output-dir ../release)
+
+          # 3. 计算 MD5 校验和
+          cd release
+          for f in *.qpkg; do
+            [ -f "$f" ] && md5sum "$f" > "${f}.md5"
+          done
+          echo "构建完成制品列表："
+          ls -lh
+
+      - name: Publish GitHub Release
+        if: steps.version_check.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version_check.outputs.target_version }}"
+          name: "EasyTier QPKG v${{ steps.version_check.outputs.target_version }}"
+          draft: false
+          prerelease: false
+          files: |
+            release/*.qpkg
+            release/*.qpkg.md5
+          body: |
+            ### 威联通 QNAP EasyTier 原生插件发布 (v${{ steps.version_check.outputs.target_version }})
+            
+            基于官方 EasyTier **v${{ steps.version_check.outputs.target_version }}** 核心自动构建交付。
+            
+            #### 📦 安装包下载
+            - `easytier_${{ steps.version_check.outputs.target_version }}_x86_64.qpkg`（适用于 Intel / AMD 架构 NAS）
+            - `easytier_${{ steps.version_check.outputs.target_version }}_arm_64.qpkg`（适用于 ARM64 架构 NAS）
+            
+            #### 🛠️ 快速安装说明
+            1. 下载对应 NAS 架构的 `.qpkg` 文件；
+            2. 登录 QTS 桌面 ➔ 打开 **App Center** ➔ 点击右上角手动安装；
+            3. 安装成功后即可通过 QTS 桌面图标访问现代 WebUI 控制台。
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and Push Updated Binaries to Main
+        if: steps.version_check.outputs.should_build == 'true' && github.event_name != 'push'
+        run: |
+          TARGET_VER="${{ steps.version_check.outputs.target_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add shared/version qpkg.cfg x86_64/ arm_64/
+          if git diff --staged --quiet; then
+            echo "仓库核心文件无变更，无需提交"
+          else
+            git commit -m "[auto] 同步上游 EasyTier v${TARGET_VER} 并更新构建产物"
+            git push origin HEAD:${{ github.ref_name || 'main' }}
+          fi

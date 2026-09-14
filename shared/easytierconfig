@@ -1,0 +1,240 @@
+#!/bin/sh
+CONF="/etc/config/qpkg.conf"
+QPKG_NAME="easytier"
+QPKG_ROOT=$(/sbin/getcfg $QPKG_NAME Install_Path -f ${CONF} 2>/dev/null)
+
+if [ -z "$QPKG_ROOT" ] || [ ! -d "$QPKG_ROOT" ]; then
+    SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+    QPKG_ROOT=$(dirname "$SCRIPT_DIR")
+fi
+
+CONFIG_DIR="$QPKG_ROOT/configs"
+if [ ! -d "$CONFIG_DIR" ]; then
+    CONFIG_DIR="$QPKG_ROOT/shared/configs"
+fi
+
+CONFIG_JSON="$CONFIG_DIR/easytier.conf"
+CONFIG_TOML="$CONFIG_DIR/easytier.toml"
+STATE_JSON="$CONFIG_DIR/state.json"
+LOG_FILE="$QPKG_ROOT/easytier.log"
+
+log_msg() {
+    local level="${2:-INFO}"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $1" >> "$LOG_FILE"
+}
+
+get_dev_name() {
+    local dev="et0"
+    if [ -f "$CONFIG_TOML" ]; then
+        local matched=$(grep -E '^\s*dev_name\s*=' "$CONFIG_TOML" | head -n1 | cut -d'"' -f2)
+        [ -n "$matched" ] && dev="$matched"
+    fi
+    echo "$dev"
+}
+
+check_qufirewall() {
+    [ ! -x "/sbin/getcfg" ] && return
+    which iptables >/dev/null 2>&1 || return
+
+    local qf_enabled=$(/sbin/getcfg qufirewall Enable -u -d FALSE -f "$CONF" 2>/dev/null)
+    local qf_status=$(/sbin/getcfg Global firewall_status -d 0 -f /etc/config/QuFirewall.conf 2>/dev/null)
+    
+    if [ "$qf_enabled" = "TRUE" ] && [ "$qf_status" = "1" ]; then
+        local dev=$(get_dev_name)
+        if ! iptables -C QUFIREWALL -i "$dev" -j ACCEPT 2>/dev/null; then
+            iptables -I QUFIREWALL 1 -i "$dev" -j ACCEPT 2>/dev/null
+            log_msg "QuFirewall: 已为 EasyTier 接口 [$dev] 添加放行规则。"
+        fi
+    fi
+}
+
+sync_state() {
+    local pid=$(pidof easytier-core)
+    local dev=$(get_dev_name)
+    local ip_out=""
+    local version=""
+    local running="false"
+
+    if [ -n "$pid" ]; then
+        running="true"
+        if [ -x "/usr/bin/easytier-cli" ]; then
+            version=$(/usr/bin/easytier-cli --version 2>/dev/null | head -n1)
+        fi
+        if [ -x "/sbin/ip" ]; then
+            ip_out=$(/sbin/ip addr show dev "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1)
+        elif [ -x "/sbin/ifconfig" ]; then
+            ip_out=$(/sbin/ifconfig "$dev" 2>/dev/null | awk '/inet addr:/{print $2}' | cut -d: -f2 | head -n1)
+        fi
+    fi
+
+    # 汇总轻量级 state.json
+    local now=$(date '+%Y-%m-%d %H:%M:%S')
+    cat <<EOF > "$STATE_JSON.tmp"
+{
+  "running": $running,
+  "pid": "$pid",
+  "version": "$version",
+  "dev_name": "$dev",
+  "ipv4": "$ip_out",
+  "updated_at": "$now"
+}
+EOF
+    mv "$STATE_JSON.tmp" "$STATE_JSON" 2>/dev/null
+}
+
+ensure_tun_device() {
+    modprobe tun >/dev/null 2>&1
+    if [ ! -c /dev/net/tun ]; then
+        mkdir -p /dev/net
+        mknod /dev/net/tun c 10 200 2>/dev/null
+    fi
+    chmod 666 /dev/net/tun 2>/dev/null
+}
+
+get_core_bin() {
+    local bin="$QPKG_ROOT/easytier-core"
+    [ ! -x "$bin" ] && bin="$QPKG_ROOT/x86_64/easytier-core"
+    [ ! -x "$bin" ] && bin="$QPKG_ROOT/arm_64/easytier-core"
+    [ ! -x "$bin" ] && bin=$(which easytier-core 2>/dev/null)
+    echo "$bin"
+}
+
+start_core() {
+    ensure_tun_device
+
+    # 自动探测并填充 NAS 系统主机名
+    local nas_host="qnap-easytier"
+    if [ -x "/sbin/getcfg" ] && [ -f "/etc/config/uLinux.conf" ]; then
+        local cf_host=$(/sbin/getcfg System "Server Name" -f /etc/config/uLinux.conf 2>/dev/null)
+        [ -n "$cf_host" ] && nas_host="$cf_host"
+    fi
+    nas_host=$(echo "$nas_host" | sed 's/[^a-zA-Z0-9_\-]//g')
+    if [ -n "$nas_host" ] && [ -f "$CONFIG_TOML" ]; then
+        sed -i "s/instance_name = \"\"/instance_name = \"$nas_host\"/g" "$CONFIG_TOML" 2>/dev/null
+    fi
+
+    local custom_args=""
+    if [ -f "$CONFIG_DIR/custom_flags.txt" ]; then
+        custom_args=$(cat "$CONFIG_DIR/custom_flags.txt" 2>/dev/null | tr '\r\n' ' ')
+    fi
+
+    local core_bin=$(get_core_bin)
+    if [ -x "$core_bin" ]; then
+        if [ -f "$CONFIG_TOML" ]; then
+            eval "\"$core_bin\" -c \"$CONFIG_TOML\" $custom_args >> \"$LOG_FILE\" 2>&1 &"
+        else
+            eval "\"$core_bin\" -d $custom_args >> \"$LOG_FILE\" 2>&1 &"
+        fi
+        log_msg "EasyTier 核心服务已成功启动 (PID: $(pidof easytier-core))。"
+    else
+        log_msg "未找到 easytier-core 可执行文件，启动失败。" "ERROR"
+    fi
+}
+
+stop_core() {
+    killall -15 easytier-core 2>/dev/null
+    sleep 1
+    killall -9 easytier-core 2>/dev/null
+    log_msg "EasyTier 核心服务已停止。"
+}
+
+handle_signals_and_config() {
+    local action_file="$CONFIG_DIR/.action_signal"
+    local restart_file="$CONFIG_DIR/.restart_signal"
+
+    # 1. 优先处理显式动作指令 (start / stop / restart)
+    if [ -f "$action_file" ]; then
+        local action=$(cat "$action_file" 2>/dev/null | tr -d ' \n\r')
+        rm -f "$action_file" 2>/dev/null
+        log_msg "接收到前端服务控制信号: [$action]"
+
+        case "$action" in
+            stop)
+                stop_core
+                return
+                ;;
+            start)
+                PID=$(pidof easytier-core)
+                if [ -z "$PID" ]; then
+                    start_core
+                fi
+                return
+                ;;
+            restart)
+                stop_core
+                sleep 1
+                start_core
+                return
+                ;;
+        esac
+    fi
+
+    # 2. 处理平滑重载/重启信号
+    local need_reload=0
+    if [ -f "$restart_file" ]; then
+        need_reload=1
+        rm -f "$restart_file" 2>/dev/null
+    fi
+
+    if [ -f "$CONFIG_JSON" ]; then
+        local need_change=$(grep -o '"change"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_JSON" 2>/dev/null | cut -d'"' -f4)
+        if [ "$need_change" = "1" ]; then
+            need_reload=1
+            sed -i 's/"change"[[:space:]]*:[[:space:]]*"1"/"change": "0"/' "$CONFIG_JSON" 2>/dev/null
+        fi
+    fi
+
+    if [ "$need_reload" -eq 1 ]; then
+        log_msg "检测到 EasyTier 配置更新或重载信号，正在平滑重启核心服务..."
+        stop_core
+        sleep 1
+        start_core
+    fi
+}
+
+check_web_symlinks() {
+    local web_src="$QPKG_ROOT/web"
+    [ ! -d "$web_src" ] && web_src="$QPKG_ROOT/shared/web"
+    [ ! -d "$web_src" ] && return
+
+    for target_web in /share/Web /share/Qweb /share/CACHEDEV1_DATA/Web; do
+        if [ -d "$target_web" ] && [ ! -e "$target_web/easytier" ]; then
+            ln -sf "$web_src" "$target_web/easytier"
+            log_msg "已自动建立 WebUI 挂载: $target_web/easytier -> $web_src"
+        fi
+    done
+    [ -d "$QPKG_ROOT/configs" ] && chmod -Rf 777 "$QPKG_ROOT/configs" 2>/dev/null
+    [ -d "$QPKG_ROOT/shared/configs" ] && chmod -Rf 777 "$QPKG_ROOT/shared/configs" 2>/dev/null
+}
+
+log_msg "EasyTier 后台守护监控启动。"
+ensure_tun_device
+
+LOOP_COUNTER=0
+
+while true; do
+    handle_signals_and_config
+
+    # 进程保活逻辑：如果配置启用了服务但进程不在，则自动拉起
+    PID=$(pidof easytier-core)
+    if [ -z "$PID" ]; then
+        local enabled="1"
+        if [ -f "$CONFIG_JSON" ]; then
+            enabled=$(grep -o '"enabled"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_JSON" | awk -F: '{print $2}' | tr -d ' ')
+        fi
+        if [ "$enabled" = "1" ]; then
+            log_msg "EasyTier 核心服务未运行，正在以 root 权限自动拉起..." "WARNING"
+            start_core
+        fi
+    fi
+
+    # 每 10 秒（5 次循环）执行状态同步、防火墙校验与 Web 挂载自愈
+    if [ $((LOOP_COUNTER % 5)) -eq 0 ]; then
+        sync_state
+        check_qufirewall
+        check_web_symlinks
+    fi
+
+    LOOP_COUNTER=$((LOOP_COUNTER + 1))
+    sleep 2
+done

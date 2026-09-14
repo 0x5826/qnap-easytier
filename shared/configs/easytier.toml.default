@@ -1,0 +1,19 @@
+# EasyTier configuration file for QNAP
+instance_name = ""
+dhcp = true
+listeners = [
+    "tcp://0.0.0.0:11010",
+    "udp://0.0.0.0:11010",
+]
+rpc_portal = "127.0.0.1:15888"
+
+peer = [
+    { uri = "tcp://public.easytier.top:11010" }
+]
+
+[network_identity]
+network_name = "easytier"
+network_secret = ""
+
+[flags]
+dev_name = "et0"
