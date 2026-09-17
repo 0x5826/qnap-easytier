@@ -167,20 +167,17 @@ function generateToml(array $conf) {
     $toml .= 'network_name = "' . addslashes($conf['network_name'] ?? 'easytier') . "\"\n";
     $toml .= 'network_secret = "' . addslashes($conf['network_secret'] ?? '') . "\"\n\n";
 
+    if (!empty($conf['proxy_networks']) && is_array($conf['proxy_networks'])) {
+        $validProxies = array_filter(array_map('trim', $conf['proxy_networks']));
+        foreach ($validProxies as $pn) {
+            $toml .= "[[proxy_network]]\n";
+            $toml .= 'cidr = "' . addslashes($pn) . "\"\n\n";
+        }
+    }
+
     $toml .= "[flags]\n";
     $dev = !empty($conf['dev_name']) ? $conf['dev_name'] : 'et0';
     $toml .= 'dev_name = "' . addslashes($dev) . "\"\n";
-
-    if (!empty($conf['proxy_networks']) && is_array($conf['proxy_networks'])) {
-        $validProxies = array_filter(array_map('trim', $conf['proxy_networks']));
-        if (!empty($validProxies)) {
-            $toml .= "proxy_networks = [\n";
-            foreach ($validProxies as $pn) {
-                $toml .= '    "' . addslashes($pn) . "\",\n";
-            }
-            $toml .= "]\n";
-        }
-    }
 
     return $toml;
 }
