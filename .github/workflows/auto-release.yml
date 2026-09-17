@@ -158,7 +158,7 @@ jobs:
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/x86_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
-          (cd build_pkg && qbuild --root . --output-dir ../release)
+          (cd build_pkg && qbuild --build-dir ../release)
           
           # 2. 构建 arm_64 架构包
           echo "Building arm_64 package (v${TARGET_VER})..."
@@ -172,7 +172,7 @@ jobs:
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/arm_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
-          (cd build_pkg && qbuild --root . --output-dir ../release)
+          (cd build_pkg && qbuild --build-dir ../release)
           rm -rf build_pkg
 
           # 3. 计算 MD5 校验和
