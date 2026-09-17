@@ -2,20 +2,31 @@ name: Auto Check & Release EasyTier QPKG
 
 on:
   schedule:
-    # 每周一 UTC 00:00 (北京时间早 08:00) 定期自动检查
+    # 每周一 UTC 00:00 (北京时间早 08:00) 定期自动巡检上游官方版本
     - cron: '0 0 * * 1'
   workflow_dispatch:
     inputs:
       target_version:
-        description: '指定构建版本（留空则自动检测官方最新 Release，例如 2.6.4）'
+        description: '指定构建版本（留空则使用当前本地版本，例如 2.6.4）'
         required: false
         default: ''
       force_build:
-        description: '是否强制重新构建（即使版本已存在）'
+        description: '是否强制重新构建（即使版本未升级）'
         required: false
         type: boolean
-        default: false
+        default: true
   push:
+    branches:
+      - main
+    paths:
+      - 'shared/**'
+      - 'icons/**'
+      - 'qpkg.cfg'
+      - 'package_routines'
+      - 'scripts/**'
+      - 'x86_64/**'
+      - 'arm_64/**'
+      - '.github/workflows/auto-release.yml'
     tags:
       - 'v*'
 
@@ -24,7 +35,7 @@ permissions:
 
 jobs:
   check-and-build:
-    name: Check Upstream & Build QPKG
+    name: Build and Release QPKG
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -33,49 +44,54 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect Versions
+      - name: Determine Build Target & Version
         id: version_check
         run: |
           set -e
           
           # 1. 获取当前仓库本地版本
-          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '0.0.0')"
+          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '2.6.4')"
           LOCAL_VER="${LOCAL_VER#v}"
-          echo "本地仓库版本: $LOCAL_VER"
+          echo "本地仓库基准版本: $LOCAL_VER"
           
-          # 2. 判断目标版本
+          # 2. 判断触发源与构建目标版本
           INPUT_VER="${{ github.event.inputs.target_version }}"
           FORCE_BUILD="${{ github.event.inputs.force_build }}"
           TAG_REF="${{ github.ref_name }}"
+          EVENT="${{ github.event_name }}"
           
-          if [[ "${{ github.event_name }}" == "push" && "$TAG_REF" =~ ^v[0-9] ]]; then
+          SHOULD_BUILD="false"
+          TARGET_VER="$LOCAL_VER"
+          
+          if [[ "$EVENT" == "push" && "$TAG_REF" =~ ^v[0-9] ]]; then
             TARGET_VER="${TAG_REF#v}"
             SHOULD_BUILD="true"
-            echo "触发方式: Tag 推送 ($TAG_REF)"
-          elif [ -n "$INPUT_VER" ]; then
-            TARGET_VER="${INPUT_VER#v}"
+            echo "触发模式: Tag 推送 ($TAG_REF) -> 启动全量构建"
+          elif [[ "$EVENT" == "push" ]]; then
+            TARGET_VER="$LOCAL_VER"
             SHOULD_BUILD="true"
-            echo "触发方式: 手动指定版本 ($TARGET_VER)"
-          else
-            echo "正在查询 EasyTier 官方最新 Release..."
-            UPSTREAM_TAG=$(curl -sSL "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4 || true)
-            if [ -z "$UPSTREAM_TAG" ]; then
-              echo "警告: 无法通过 API 获取官方最新 tag，使用当前本地版本"
-              TARGET_VER="$LOCAL_VER"
-            else
-              TARGET_VER="${UPSTREAM_TAG#v}"
+            echo "触发模式: 核心文件变更推送 (分支: ${{ github.ref_name }}) -> 启动即时构建发布 (v$TARGET_VER)"
+          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            if [ -n "$INPUT_VER" ]; then
+              TARGET_VER="${INPUT_VER#v}"
             fi
-            echo "官方最新版本: $TARGET_VER"
-            
-            if [ "$FORCE_BUILD" = "true" ]; then
-              SHOULD_BUILD="true"
-              echo "启用强制构建模式"
-            elif [ "$TARGET_VER" != "$LOCAL_VER" ]; then
-              SHOULD_BUILD="true"
-              echo "检测到官方新版本: $TARGET_VER (本地: $LOCAL_VER)，启动自动构建发布"
+            SHOULD_BUILD="true"
+            echo "触发模式: 手动触发 (版本: $TARGET_VER) -> 启动构建"
+          elif [[ "$EVENT" == "schedule" ]]; then
+            echo "触发模式: 每周定时巡检上游官方版本..."
+            UPSTREAM_TAG=$(curl -sSL "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4 || true)
+            if [ -n "$UPSTREAM_TAG" ]; then
+              UPSTREAM_VER="${UPSTREAM_TAG#v}"
+              echo "官方最新版本: $UPSTREAM_VER (本地当前: $LOCAL_VER)"
+              if [ "$UPSTREAM_VER" != "$LOCAL_VER" ]; then
+                TARGET_VER="$UPSTREAM_VER"
+                SHOULD_BUILD="true"
+                echo "检测到官方新版本升级，启动构建发布流程！"
+              else
+                echo "当前已与官方最新版本保持一致，本次巡检无需构建。"
+              fi
             else
-              SHOULD_BUILD="false"
-              echo "当前已是官方最新版本 ($LOCAL_VER)，无需构建"
+              echo "未能获取到官方最新 Release Tag，跳过构建。"
             fi
           fi
           
@@ -105,19 +121,23 @@ jobs:
           
           qbuild --version || true
 
-      - name: Download Target Binaries & Update Configs
+      - name: Prepare Binaries & Configs
         if: steps.version_check.outputs.should_build == 'true'
         run: |
           TARGET_VER="${{ steps.version_check.outputs.target_version }}"
-          echo "正在拉取 EasyTier v${TARGET_VER} 双架构静态二进制..."
+          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '')"
+          LOCAL_VER="${LOCAL_VER#v}"
           
-          # 执行下载脚本
-          chmod +x scripts/download_binaries.sh
-          ./scripts/download_binaries.sh "${TARGET_VER}"
-          
-          # 更新仓库内的版本号
-          echo "${TARGET_VER}" > shared/version
-          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" qpkg.cfg
+          # 若目标版本与现有版本不一致，或者缺少二进制文件，拉取对应二进制
+          if [ "$TARGET_VER" != "$LOCAL_VER" ] || [ ! -f "x86_64/easytier-core" ] || [ ! -f "arm_64/easytier-core" ]; then
+            echo "正在下载 EasyTier v${TARGET_VER} 双架构静态程序..."
+            chmod +x scripts/download_binaries.sh
+            ./scripts/download_binaries.sh "${TARGET_VER}"
+            echo "${TARGET_VER}" > shared/version
+            sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" qpkg.cfg
+          else
+            echo "版本 ($TARGET_VER) 与本地一致且二进制完备，直接使用现有二进制打包。"
+          fi
 
       - name: Build QPKG Packages
         if: steps.version_check.outputs.should_build == 'true'
@@ -163,7 +183,7 @@ jobs:
           echo "构建完成制品列表："
           ls -lh
 
-      - name: Publish GitHub Release
+      - name: Publish or Update GitHub Release
         if: steps.version_check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
@@ -177,7 +197,7 @@ jobs:
           body: |
             ### 威联通 QNAP EasyTier 原生插件发布 (v${{ steps.version_check.outputs.target_version }})
             
-            基于官方 EasyTier **v${{ steps.version_check.outputs.target_version }}** 核心自动构建交付。
+            基于 EasyTier **v${{ steps.version_check.outputs.target_version }}** 核心自动构建交付。
             
             #### 📦 安装包下载
             - `easytier_${{ steps.version_check.outputs.target_version }}_x86_64.qpkg`（适用于 Intel / AMD 架构 NAS）
@@ -192,7 +212,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and Push Updated Binaries to Main
-        if: steps.version_check.outputs.should_build == 'true' && github.event_name != 'push'
+        if: steps.version_check.outputs.should_build == 'true' && github.event_name == 'schedule'
         run: |
           TARGET_VER="${{ steps.version_check.outputs.target_version }}"
           git config user.name "github-actions[bot]"
@@ -203,5 +223,5 @@ jobs:
             echo "仓库核心文件无变更，无需提交"
           else
             git commit -m "[auto] 同步上游 EasyTier v${TARGET_VER} 并更新构建产物"
-            git push origin HEAD:${{ github.ref_name || 'main' }}
+            git push origin HEAD:main
           fi
