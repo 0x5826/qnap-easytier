@@ -52,8 +52,8 @@ jobs:
           # 1. 获取当前仓库本地基准版本
           BASE_VER="$(cat shared/version 2>/dev/null || echo '2.6.4')"
           BASE_VER="${BASE_VER#v}"
-          RUN_NUM="${{ github.run_number }}"
-          echo "本地仓库基准版本: $BASE_VER (Run #${RUN_NUM})"
+          BUILD_DATE=$(date +'%Y%m%d')
+          echo "本地仓库基准版本: $BASE_VER (构建日期: ${BUILD_DATE})"
           
           # 2. 判断触发源与构建目标版本
           INPUT_VER="${{ github.event.inputs.target_version }}"
@@ -71,17 +71,17 @@ jobs:
             SHOULD_BUILD="true"
             echo "触发模式: Tag 推送 ($TAG_REF) -> 启动全量构建"
           elif [[ "$EVENT" == "push" ]]; then
-            # 核心文件变更推送：生成独立的修订版本 Release，保证列表最新可见
-            TARGET_VER="${BASE_VER}-r${RUN_NUM}"
+            # 核心文件变更推送：采用日期作为修订版本标识 (例如 v2.6.4-20260917)
+            TARGET_VER="${BASE_VER}-${BUILD_DATE}"
             TAG_NAME="v${TARGET_VER}"
             SHOULD_BUILD="true"
-            echo "触发模式: 核心文件变更推送 -> 生成全新独立 Release: $TAG_NAME"
+            echo "触发模式: 核心文件变更推送 -> 生成日期修订版 Release: $TAG_NAME"
           elif [[ "$EVENT" == "workflow_dispatch" ]]; then
             if [ -n "$INPUT_VER" ]; then
               TARGET_VER="${INPUT_VER#v}"
               TAG_NAME="v${TARGET_VER}"
             else
-              TARGET_VER="${BASE_VER}-r${RUN_NUM}"
+              TARGET_VER="${BASE_VER}-${BUILD_DATE}"
               TAG_NAME="v${TARGET_VER}"
             fi
             SHOULD_BUILD="true"
