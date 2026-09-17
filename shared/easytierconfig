@@ -185,10 +185,15 @@ handle_signals_and_config() {
     fi
 
     if [ "$need_reload" -eq 1 ]; then
-        log_msg "检测到 EasyTier 配置更新或重载信号，正在平滑重启核心服务..."
-        stop_core
-        sleep 1
-        start_core
+        local current_pid=$(pidof easytier-core)
+        if [ -n "$current_pid" ]; then
+            log_msg "检测到 EasyTier 配置更新且核心正在运行 (PID: $current_pid)，正在平滑重启核心服务..."
+            stop_core
+            sleep 1
+            start_core
+        else
+            log_msg "检测到 EasyTier 配置更新，但当前核心未运行 (已停止)，仅保存配置，跳过自启。"
+        fi
     fi
 }
 

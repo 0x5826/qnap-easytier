@@ -391,7 +391,7 @@ $assetVer = file_exists(__DIR__ . '/static/logo.png') ? filemtime(__DIR__ . '/st
                         </div>
 
                         <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="btnSaveBasic">保存并应用</button>
+                            <button type="submit" class="btn btn-primary" id="btnSaveBasic">保存并重启生效</button>
                             <button type="button" class="btn btn-outline" id="btnResetBasic">重置表单</button>
                         </div>
                     </form>
@@ -433,7 +433,7 @@ $assetVer = file_exists(__DIR__ . '/static/logo.png') ? filemtime(__DIR__ . '/st
                         </div>
 
                         <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" id="btnSaveAdv">保存高级配置并重启</button>
+                            <button type="submit" class="btn btn-primary" id="btnSaveAdv">保存并重启生效</button>
                         </div>
                     </form>
                 </div>

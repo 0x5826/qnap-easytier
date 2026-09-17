@@ -111,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 btnServiceSwitch.className = 'btn btn-primary';
                 statPid.textContent = '未运行';
             }
+            updateSaveButtons();
 
             // 动态更新顶栏版本号
             if (d.version) {
@@ -271,6 +272,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // 根据服务运行状态自适应更新保存按钮文案
+    function updateSaveButtons() {
+        const btnSaveBasic = document.getElementById('btnSaveBasic');
+        const btnSaveAdv = document.getElementById('btnSaveAdv');
+        const btnText = isServiceRunning ? '保存并重启生效' : '保存配置';
+        if (btnSaveBasic) btnSaveBasic.textContent = btnText;
+        if (btnSaveAdv) btnSaveAdv.textContent = btnText;
+    }
+
     // 保存配置
     async function saveConfigData(applyNow = false) {
         const peersVal = document.getElementById('peers').value
@@ -289,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .filter(Boolean);
 
         const payload = {
-            enabled: 1,
+            enabled: isServiceRunning ? 1 : 0,
             instance_name: document.getElementById('instance_name').value.trim(),
             dhcp: ipModeDhcp.checked,
             ipv4: document.getElementById('ipv4').value.trim(),
@@ -301,7 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
             rpc_portal: document.getElementById('rpc_portal').value.trim() || '127.0.0.1:15888',
             custom_flags: document.getElementById('custom_flags').value.trim(),
             proxy_networks: proxyVal,
-            apply_now: applyNow
+            apply_now: isServiceRunning ? applyNow : false
         };
 
         try {
@@ -312,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const json = await res.json();
             if (json.success) {
-                showToast(json.message || '配置已成功保存！');
+                showToast(json.message || (isServiceRunning ? '保存并已重启' : '配置已保存'));
                 setTimeout(fetchStatus, 2000);
             } else {
                 showToast(json.message || '保存失败', true);

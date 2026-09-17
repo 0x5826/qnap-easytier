@@ -514,9 +514,16 @@ switch ($action) {
 
         $customFlags = trim($input['custom_flags'] ?? '');
 
+        $corePid = trim(shell_exec('pidof easytier-core 2>/dev/null') ?? '');
+        $isCurrentlyRunning = !empty($corePid);
+
+        // 如果服务当前未运行，保持 enabled=0 且 change=0，绝不触发自启
+        $finalEnabled = $isCurrentlyRunning ? (!empty($input['enabled']) ? 1 : 0) : 0;
+        $needChange = $isCurrentlyRunning ? '1' : '0';
+
         // 参数安全过滤与格式化
         $cleanConfig = [
-            'enabled' => !empty($input['enabled']) ? 1 : 0,
+            'enabled' => $finalEnabled,
             'instance_name' => $cleanInst,
             'ipv4' => trim($input['ipv4'] ?? ''),
             'dhcp' => isset($input['dhcp']) ? !empty($input['dhcp']) : true,
@@ -528,7 +535,7 @@ switch ($action) {
             'dev_name' => preg_replace('/[^a-zA-Z0-9_\-]/', '', $input['dev_name'] ?? 'et0'),
             'proxy_networks' => is_array($input['proxy_networks']) ? array_values(array_filter(array_map('trim', $input['proxy_networks']))) : [],
             'custom_flags' => $customFlags,
-            'change' => '1'
+            'change' => $needChange
         ];
 
         if (!is_dir($configDir)) {
@@ -558,13 +565,17 @@ switch ($action) {
         @copy($tomlFile, $sysPersistDir . '/easytier.toml');
         @copy($customFlagsFile, $sysPersistDir . '/custom_flags.txt');
 
-        // 触发后台守护进程 (easytierconfig) 以 root 权限平滑重载
-        $restartMessage = '配置已成功保存';
-        if (!empty($input['apply_now'])) {
+        // 触发后台守护进程 (easytierconfig) 以 root 权限平滑重载 (仅当核心服务正在运行时)
+        if ($isCurrentlyRunning) {
             $signalFile = $configDir . '/.restart_signal';
             @touch($signalFile);
             @chmod($signalFile, 0666);
-            $restartMessage = '配置已保存并平滑生效';
+            $restartMessage = '保存并已重启';
+        } else {
+            // 确保清理任何可能残留的重启信号
+            $signalFile = $configDir . '/.restart_signal';
+            @unlink($signalFile);
+            $restartMessage = '配置已保存';
         }
 
         echo json_encode(['success' => true, 'message' => $restartMessage]);
