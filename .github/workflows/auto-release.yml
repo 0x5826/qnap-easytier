@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       target_version:
-        description: '指定构建版本（留空则自动生成修订版本，例如 2.6.4-r1）'
+        description: '指定构建版本（留空则自动生成修订版本，例如 2.6.4-20260917）'
         required: false
         default: ''
       force_build:
@@ -53,6 +53,7 @@ jobs:
           BASE_VER="$(cat shared/version 2>/dev/null || echo '2.6.4')"
           BASE_VER="${BASE_VER#v}"
           BUILD_DATE=$(date +'%Y%m%d')
+          MMDD=$(date +'%m%d')
           echo "本地仓库基准版本: $BASE_VER (构建日期: ${BUILD_DATE})"
           
           # 2. 判断触发源与构建目标版本
@@ -71,7 +72,7 @@ jobs:
             SHOULD_BUILD="true"
             echo "触发模式: Tag 推送 ($TAG_REF) -> 启动全量构建"
           elif [[ "$EVENT" == "push" ]]; then
-            # 核心文件变更推送：采用日期作为修订版本标识 (例如 v2.6.4-20260917)
+            # 核心文件变更推送：采用日期作为修订版本标识
             TARGET_VER="${BASE_VER}-${BUILD_DATE}"
             TAG_NAME="v${TARGET_VER}"
             SHOULD_BUILD="true"
@@ -105,7 +106,15 @@ jobs:
             fi
           fi
           
+          # QTS 规范: qpkg.cfg 内的 QPKG_VER 必须 <= 10 字符且推荐纯点分格式 (例如 2.6.4.0917)
+          TARGET_CORE="${TARGET_VER%%-*}"
+          INTERNAL_VER="${TARGET_CORE}.${MMDD}"
+          if [ ${#INTERNAL_VER} -gt 10 ]; then
+            INTERNAL_VER="${TARGET_CORE}"
+          fi
+          
           echo "target_version=$TARGET_VER" >> $GITHUB_OUTPUT
+          echo "internal_version=$INTERNAL_VER" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
 
@@ -113,24 +122,32 @@ jobs:
         if: steps.version_check.outputs.should_build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full bc curl unzip rsync
+          sudo apt-get install -y build-essential p7zip-full bc curl unzip rsync
           
-          # 下载并安装官方 QDK 环境
+          # 下载官方 QDK 源码
           wget -q https://github.com/qnap-dev/QDK/archive/refs/tags/v2.3.14.tar.gz
           tar -xzf v2.3.14.tar.gz
           
-          # 官方 QDK 核心文件位于解压后的 shared 目录
+          # 1. 编译关键签名工具 qpkg_encrypt 并部署到系统 PATH
+          # 该工具用于生成 QPKG 规范的加密与数字校验尾部，缺失会导致 QTS 提示“文件格式错误”
+          gcc -O2 -o qpkg_encrypt QDK-2.3.14/src/qpkg_encrypt.c
+          sudo cp qpkg_encrypt /usr/local/bin/
+          sudo cp qpkg_encrypt /usr/bin/
+          sudo cp qpkg_encrypt /bin/
+          
+          # 2. 部署 QDK 核心文件
           sudo mkdir -p /usr/share/QDK /etc/config
           sudo cp -rf QDK-2.3.14/shared/* /usr/share/QDK/
           sudo chmod +x /usr/share/QDK/bin/*
           sudo ln -sf /usr/share/QDK/bin/qbuild /usr/local/bin/qbuild
           
-          # 配置 QDK 路径
+          # 3. 配置 QDK 路径
           sudo cp /usr/share/QDK/qdk.conf /etc/config/qdk.conf
           sudo sed -i 's|^QDK_PATH_P=.*|QDK_PATH_P=/usr/share|' /etc/config/qdk.conf
           sudo sed -i 's|^QDK_PATH=.*|QDK_PATH=/usr/share/QDK|' /etc/config/qdk.conf
           
           qbuild --version || true
+          which qpkg_encrypt || true
 
       - name: Prepare Binaries & Configs
         if: steps.version_check.outputs.should_build == 'true'
@@ -154,11 +171,12 @@ jobs:
         if: steps.version_check.outputs.should_build == 'true'
         run: |
           TARGET_VER="${{ steps.version_check.outputs.target_version }}"
+          INTERNAL_VER="${{ steps.version_check.outputs.internal_version }}"
           mkdir -p release
           rm -f release/*.qpkg release/*.md5
           
           # 1. 构建 x86_64 架构包
-          echo "Building x86_64 package (v${TARGET_VER})..."
+          echo "Building x86_64 package (v${TARGET_VER}, internal: ${INTERNAL_VER})..."
           rm -rf build_pkg
           mkdir -p build_pkg/x86_64 build_pkg/icons build_pkg/shared
           cp -r package_routines qpkg.cfg build_pkg/
@@ -169,24 +187,28 @@ jobs:
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/x86_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
-          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" build_pkg/qpkg.cfg
+          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
           (cd build_pkg && qbuild --build-dir ../release)
           
+          # 规范产物文件名为带完整日期的目标名称
+          [ "${INTERNAL_VER}" != "${TARGET_VER}" ] && [ -f "release/easytier_${INTERNAL_VER}_x86_64.qpkg" ] && mv -f "release/easytier_${INTERNAL_VER}_x86_64.qpkg" "release/easytier_${TARGET_VER}_x86_64.qpkg"
+          
           # 2. 构建 arm_64 架构包
-          echo "Building arm_64 package (v${TARGET_VER})..."
+          echo "Building arm_64 package (v${TARGET_VER}, internal: ${INTERNAL_VER})..."
           rm -rf build_pkg
           mkdir -p build_pkg/arm_64 build_pkg/icons build_pkg/shared
           cp -r package_routines qpkg.cfg build_pkg/
           cp -r icons/* build_pkg/icons/
           cp -r shared/* build_pkg/shared/
           cp arm_64/easytier-core arm_64/easytier-cli build_pkg/arm_64/
-          
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/arm_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
-          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" build_pkg/qpkg.cfg
+          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
           (cd build_pkg && qbuild --build-dir ../release)
           rm -rf build_pkg
+          
+          [ "${INTERNAL_VER}" != "${TARGET_VER}" ] && [ -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" ] && mv -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" "release/easytier_${TARGET_VER}_arm_64.qpkg"
 
           # 3. 计算 MD5 校验和
           cd release
@@ -211,7 +233,7 @@ jobs:
             ### 威联通 QNAP EasyTier 原生插件发布 (${{ steps.version_check.outputs.tag_name }})
             
             - **基础核心版本**：EasyTier `v${{ steps.version_check.outputs.target_version }}`
-            - **构建触发源**：`${{ github.event_name }}`
+            - **内部固件版本**：`${{ steps.version_check.outputs.internal_version }}`
             - **提交哈希**：`${{ github.sha }}`
             
             #### 📦 安装包下载
