@@ -189,14 +189,15 @@ jobs:
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
           sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
           sudo chown -R root:root build_pkg/
-          (cd build_pkg && qbuild --build-dir ../release)
+          (cd build_pkg && sudo qbuild --build-dir ../release)
+          sudo chown -R $USER:$USER release/
           
           # 规范产物文件名为带完整日期的目标名称
           [ "${INTERNAL_VER}" != "${TARGET_VER}" ] && [ -f "release/easytier_${INTERNAL_VER}_x86_64.qpkg" ] && mv -f "release/easytier_${INTERNAL_VER}_x86_64.qpkg" "release/easytier_${TARGET_VER}_x86_64.qpkg"
           
           # 2. 构建 arm_64 架构包
           echo "Building arm_64 package (v${TARGET_VER}, internal: ${INTERNAL_VER})..."
-          rm -rf build_pkg
+          sudo rm -rf build_pkg
           mkdir -p build_pkg/arm_64 build_pkg/icons build_pkg/shared
           cp -r package_routines qpkg.cfg build_pkg/
           cp -r icons/* build_pkg/icons/
@@ -207,8 +208,9 @@ jobs:
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
           sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
           sudo chown -R root:root build_pkg/
-          (cd build_pkg && qbuild --build-dir ../release)
-          rm -rf build_pkg
+          (cd build_pkg && sudo qbuild --build-dir ../release)
+          sudo rm -rf build_pkg
+          sudo chown -R $USER:$USER release/
           
           [ "${INTERNAL_VER}" != "${TARGET_VER}" ] && [ -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" ] && mv -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" "release/easytier_${TARGET_VER}_arm_64.qpkg"
 
