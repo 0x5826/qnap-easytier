@@ -299,6 +299,7 @@ switch ($action) {
             // 查询路由 (EasyTier 2.6.x 格式: ipv4 | hostname | proxy_cidrs | next_hop_ipv4 | next_hop_hostname | next_hop_lat | path_len | path_latency | ...)
             $routeOut = shell_exec("$cliBin route 2>/dev/null");
             $routesList = [];
+            $localProxyCidr = '';
             if (!empty($routeOut)) {
                 $lines = explode("\n", trim($routeOut));
                 foreach ($lines as $line) {
@@ -326,8 +327,14 @@ switch ($action) {
                     if (count($cols) >= 5) {
                         $nextHopIp = $cols[3] ?? '';
                         $nextHopHost = $cols[4] ?? '';
-                        // 彻底过滤下一跳为 Local 或 - 的本地自身路由条目
+                        // 提取本地自身节点 (Local 或 -) 的代理网段并注入 local_node，同时不混入对外转发路由列表
                         if (strcasecmp($nextHopIp, 'local') === 0 || strcasecmp($nextHopHost, 'local') === 0 || $nextHopIp === '-') {
+                            $localProxy = (!empty($cols[2]) && $cols[2] !== '-') ? $cols[2] : '';
+                            if (!empty($localProxy)) {
+                                $localProxyCidr = $localProxy;
+                                if (!isset($state['local_node'])) $state['local_node'] = [];
+                                $state['local_node']['proxy_cidrs'] = $localProxy;
+                            }
                             continue;
                         }
 
@@ -403,23 +410,34 @@ switch ($action) {
                     'node_id' => $localId,
                     'hostname' => $localHost,
                     'ipv4' => $localIp,
-                    'proxy_cidrs' => '',
+                    'proxy_cidrs' => $localProxyCidr,
                     'direct_peers' => $directPeers
                 ]);
             }
 
             // 融合路由表中的 proxy_cidrs 到各个拓扑节点
-            if (!empty($topoNodes) && !empty($routesList)) {
+            if (!empty($topoNodes)) {
                 $routeProxyMap = [];
-                foreach ($routesList as $r) {
-                    $ipClean = explode('/', $r['destination'] ?? '')[0];
-                    $host = $r['hostname'] ?? '';
-                    $p = $r['proxy_cidrs'] ?? '';
-                    if (!empty($p) && $p !== '--') {
-                        if (!empty($ipClean)) $routeProxyMap[$ipClean] = $p;
-                        if (!empty($host)) $routeProxyMap[$host] = $p;
+                if (!empty($routesList)) {
+                    foreach ($routesList as $r) {
+                        $ipClean = explode('/', $r['destination'] ?? '')[0];
+                        $host = $r['hostname'] ?? '';
+                        $p = $r['proxy_cidrs'] ?? '';
+                        if (!empty($p) && $p !== '--') {
+                            if (!empty($ipClean)) $routeProxyMap[$ipClean] = $p;
+                            if (!empty($host)) $routeProxyMap[$host] = $p;
+                        }
                     }
                 }
+
+                // 融合本地节点的代理网段映射
+                if (!empty($localProxyCidr)) {
+                    $myIp = explode('/', $state['ipv4'] ?? ($state['local_node']['ipv4'] ?? ''))[0];
+                    $myHost = $state['local_node']['hostname'] ?? '';
+                    if (!empty($myIp)) $routeProxyMap[$myIp] = $localProxyCidr;
+                    if (!empty($myHost)) $routeProxyMap[$myHost] = $localProxyCidr;
+                }
+
                 foreach ($topoNodes as &$tn) {
                     $tIp = explode('/', $tn['ipv4'] ?? '')[0];
                     $tHost = $tn['hostname'] ?? '';

@@ -485,13 +485,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const localIp = statusData.ipv4 || (statusData.local_node ? statusData.local_node.ipv4 : '10.144.144.1');
         const localHost = (statusData.local_node ? statusData.local_node.hostname : '') || 'Local';
 
+        const localProxy = (statusData.local_node && statusData.local_node.proxy_cidrs) ?
+            statusData.local_node.proxy_cidrs :
+            ((statusData.proxy_networks && statusData.proxy_networks.length) ? statusData.proxy_networks.join(', ') : '');
+
         const nodesMap = {};
         const localId = '1';
         nodesMap[localId] = {
             node_id: localId,
             hostname: localHost,
             ipv4: localIp,
-            proxy_cidrs: '',
+            proxy_cidrs: localProxy,
             direct_peers: []
         };
 
@@ -630,6 +634,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         if (localNode) {
+            if (!localNode.proxy_cidrs && latestStatusData) {
+                if (latestStatusData.local_node && latestStatusData.local_node.proxy_cidrs) {
+                    localNode.proxy_cidrs = latestStatusData.local_node.proxy_cidrs;
+                } else if (latestStatusData.proxy_networks && latestStatusData.proxy_networks.length) {
+                    localNode.proxy_cidrs = latestStatusData.proxy_networks.join(', ');
+                }
+            }
             nodes.unshift(localNode);
         }
 
