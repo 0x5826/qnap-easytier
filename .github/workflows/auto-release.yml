@@ -188,6 +188,7 @@ jobs:
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
           sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
+          sudo chown -R root:root build_pkg/
           (cd build_pkg && qbuild --build-dir ../release)
           
           # 规范产物文件名为带完整日期的目标名称
@@ -205,6 +206,7 @@ jobs:
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
           sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${INTERNAL_VER}\"/" build_pkg/qpkg.cfg
+          sudo chown -R root:root build_pkg/
           (cd build_pkg && qbuild --build-dir ../release)
           rm -rf build_pkg
           

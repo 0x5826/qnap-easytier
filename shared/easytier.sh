@@ -82,8 +82,18 @@ case "$1" in
         exit 0
     fi
 
-    # 加载内核 TUN/TAP 驱动模块与权限修复
-    modprobe tun >/dev/null 2>&1
+    # 加载内核 TUN/TAP 驱动模块与权限修复 (自动在 QNAP 系统模块库中搜寻并加载)
+    if ! lsmod 2>/dev/null | grep -q "^tun\s"; then
+        modprobe tun >/dev/null 2>&1
+        if ! lsmod 2>/dev/null | grep -q "^tun\s"; then
+            for tun_ko in $(find /lib/modules -name "tun.ko*" 2>/dev/null); do
+                if [ -f "$tun_ko" ]; then
+                    insmod "$tun_ko" >/dev/null 2>&1
+                    lsmod 2>/dev/null | grep -q "^tun\s" && break
+                fi
+            done
+        fi
+    fi
     if [ ! -c /dev/net/tun ]; then
         mkdir -p /dev/net
         mknod /dev/net/tun c 10 200 2>/dev/null
@@ -96,8 +106,9 @@ case "$1" in
         exit 1
     fi
 
+    chown -R admin:administrators "$QPKG_ROOT" 2>/dev/null
     chmod +x "$CORE_BIN" "$CLI_BIN" "$QPKG_ROOT/easytierconfig" "$QPKG_ROOT/shared/easytierconfig" 2>/dev/null
-    chmod u+s "$CORE_BIN" 2>/dev/null
+    chmod -s "$CORE_BIN" "$CLI_BIN" 2>/dev/null
     chmod -Rf 777 "$QPKG_ROOT/configs" "$LOG_FILE" 2>/dev/null
 
     # 系统级 CLI 软链接

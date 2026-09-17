@@ -18,7 +18,17 @@ PKG_MAIN_REMOVE="{
 
 pkg_init()
 {
-	modprobe tun >/dev/null 2>&1
+	if ! lsmod 2>/dev/null | grep -q "^tun\s"; then
+		modprobe tun >/dev/null 2>&1
+		if ! lsmod 2>/dev/null | grep -q "^tun\s"; then
+			for tun_ko in $(find /lib/modules -name "tun.ko*" 2>/dev/null); do
+				if [ -f "$tun_ko" ]; then
+					insmod "$tun_ko" >/dev/null 2>&1
+					lsmod 2>/dev/null | grep -q "^tun\s" && break
+				fi
+			done
+		fi
+	fi
 	if [ ! -c /dev/net/tun ]; then
 		mkdir -p /dev/net
 		mknod /dev/net/tun c 10 200 2>/dev/null
@@ -92,7 +102,9 @@ pkg_post_install()
 		touch /etc/config/qpkg.conf 2>/dev/null
 	fi
 
-	chmod u+s "$target_path/x86_64/easytier-core" 2>/dev/null
-	chmod u+s "$target_path/arm_64/easytier-core" 2>/dev/null
-	chmod u+s "$target_path/easytier-core" 2>/dev/null
+	chown -R admin:administrators "$target_path" 2>/dev/null
+	chmod +x "$target_path/x86_64/easytier-core" "$target_path/x86_64/easytier-cli" 2>/dev/null
+	chmod +x "$target_path/arm_64/easytier-core" "$target_path/arm_64/easytier-cli" 2>/dev/null
+	chmod +x "$target_path/easytier-core" "$target_path/easytier-cli" 2>/dev/null
+	chmod -s "$target_path/x86_64/easytier-core" "$target_path/arm_64/easytier-core" "$target_path/easytier-core" 2>/dev/null
 }
