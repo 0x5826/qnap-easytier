@@ -210,13 +210,28 @@ jobs:
           
           [ "${INTERNAL_VER}" != "${TARGET_VER}" ] && [ -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" ] && mv -f "release/easytier_${INTERNAL_VER}_arm_64.qpkg" "release/easytier_${TARGET_VER}_arm_64.qpkg"
 
-          # 3. 计算 MD5 校验和
+          # 3. 清理临时生成的旧 md5，重新计算目标产物 MD5 校验和
           cd release
+          rm -f *.md5
           for f in *.qpkg; do
             [ -f "$f" ] && md5sum "$f" > "${f}.md5"
           done
           echo "构建完成制品列表："
           ls -lh
+
+      - name: Clean Existing Release Assets
+        if: steps.version_check.outputs.should_build == 'true'
+        run: |
+          TAG_NAME="${{ steps.version_check.outputs.tag_name }}"
+          echo "检查并清理 Release $TAG_NAME 中的旧资产文件，确保全量强制替换..."
+          (gh release view "$TAG_NAME" --json assets --jq '.assets[].name' 2>/dev/null || true) | while read -r asset; do
+            if [ -n "$asset" ]; then
+              echo "删除旧资产: $asset"
+              gh release delete-asset "$TAG_NAME" "$asset" --yes || true
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish GitHub Release
         if: steps.version_check.outputs.should_build == 'true'
@@ -226,6 +241,7 @@ jobs:
           name: "EasyTier QPKG ${{ steps.version_check.outputs.tag_name }}"
           draft: false
           prerelease: false
+          overwrite_files: true
           files: |
             release/*.qpkg
             release/*.qpkg.md5
