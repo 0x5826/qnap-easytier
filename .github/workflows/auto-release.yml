@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       target_version:
-        description: '指定构建版本（留空则使用当前本地版本，例如 2.6.4）'
+        description: '指定构建版本（留空则自动生成修订版本，例如 2.6.4-r1）'
         required: false
         default: ''
       force_build:
-        description: '是否强制重新构建（即使版本未升级）'
+        description: '是否强制重新构建'
         required: false
         type: boolean
         default: true
@@ -49,10 +49,11 @@ jobs:
         run: |
           set -e
           
-          # 1. 获取当前仓库本地版本
-          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '2.6.4')"
-          LOCAL_VER="${LOCAL_VER#v}"
-          echo "本地仓库基准版本: $LOCAL_VER"
+          # 1. 获取当前仓库本地基准版本
+          BASE_VER="$(cat shared/version 2>/dev/null || echo '2.6.4')"
+          BASE_VER="${BASE_VER#v}"
+          RUN_NUM="${{ github.run_number }}"
+          echo "本地仓库基准版本: $BASE_VER (Run #${RUN_NUM})"
           
           # 2. 判断触发源与构建目标版本
           INPUT_VER="${{ github.event.inputs.target_version }}"
@@ -61,32 +62,41 @@ jobs:
           EVENT="${{ github.event_name }}"
           
           SHOULD_BUILD="false"
-          TARGET_VER="$LOCAL_VER"
+          TARGET_VER="$BASE_VER"
+          TAG_NAME="v$BASE_VER"
           
           if [[ "$EVENT" == "push" && "$TAG_REF" =~ ^v[0-9] ]]; then
             TARGET_VER="${TAG_REF#v}"
+            TAG_NAME="$TAG_REF"
             SHOULD_BUILD="true"
             echo "触发模式: Tag 推送 ($TAG_REF) -> 启动全量构建"
           elif [[ "$EVENT" == "push" ]]; then
-            TARGET_VER="$LOCAL_VER"
+            # 核心文件变更推送：生成独立的修订版本 Release，保证列表最新可见
+            TARGET_VER="${BASE_VER}-r${RUN_NUM}"
+            TAG_NAME="v${TARGET_VER}"
             SHOULD_BUILD="true"
-            echo "触发模式: 核心文件变更推送 (分支: ${{ github.ref_name }}) -> 启动即时构建发布 (v$TARGET_VER)"
+            echo "触发模式: 核心文件变更推送 -> 生成全新独立 Release: $TAG_NAME"
           elif [[ "$EVENT" == "workflow_dispatch" ]]; then
             if [ -n "$INPUT_VER" ]; then
               TARGET_VER="${INPUT_VER#v}"
+              TAG_NAME="v${TARGET_VER}"
+            else
+              TARGET_VER="${BASE_VER}-r${RUN_NUM}"
+              TAG_NAME="v${TARGET_VER}"
             fi
             SHOULD_BUILD="true"
-            echo "触发模式: 手动触发 (版本: $TARGET_VER) -> 启动构建"
+            echo "触发模式: 手动触发 -> 生成构建版本: $TAG_NAME"
           elif [[ "$EVENT" == "schedule" ]]; then
             echo "触发模式: 每周定时巡检上游官方版本..."
             UPSTREAM_TAG=$(curl -sSL "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4 || true)
             if [ -n "$UPSTREAM_TAG" ]; then
               UPSTREAM_VER="${UPSTREAM_TAG#v}"
-              echo "官方最新版本: $UPSTREAM_VER (本地当前: $LOCAL_VER)"
-              if [ "$UPSTREAM_VER" != "$LOCAL_VER" ]; then
+              echo "官方最新版本: $UPSTREAM_VER (本地基准: $BASE_VER)"
+              if [ "$UPSTREAM_VER" != "$BASE_VER" ]; then
                 TARGET_VER="$UPSTREAM_VER"
+                TAG_NAME="v${UPSTREAM_VER}"
                 SHOULD_BUILD="true"
-                echo "检测到官方新版本升级，启动构建发布流程！"
+                echo "检测到官方新版本升级，启动全量发布！"
               else
                 echo "当前已与官方最新版本保持一致，本次巡检无需构建。"
               fi
@@ -96,6 +106,7 @@ jobs:
           fi
           
           echo "target_version=$TARGET_VER" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
 
       - name: Setup QDK Build Environment
@@ -125,18 +136,18 @@ jobs:
         if: steps.version_check.outputs.should_build == 'true'
         run: |
           TARGET_VER="${{ steps.version_check.outputs.target_version }}"
-          LOCAL_VER="$(cat shared/version 2>/dev/null || echo '')"
-          LOCAL_VER="${LOCAL_VER#v}"
+          BASE_VER="$(cat shared/version 2>/dev/null || echo '')"
+          BASE_VER="${BASE_VER#v}"
           
-          # 若目标版本与现有版本不一致，或者缺少二进制文件，拉取对应二进制
-          if [ "$TARGET_VER" != "$LOCAL_VER" ] || [ ! -f "x86_64/easytier-core" ] || [ ! -f "arm_64/easytier-core" ]; then
-            echo "正在下载 EasyTier v${TARGET_VER} 双架构静态程序..."
+          # 仅当大版本变更且本地无对应二进制时，才拉取上游二进制
+          CORE_VER="${TARGET_VER%%-*}"
+          if [ "$CORE_VER" != "$BASE_VER" ] || [ ! -f "x86_64/easytier-core" ] || [ ! -f "arm_64/easytier-core" ]; then
+            echo "正在下载 EasyTier v${CORE_VER} 双架构静态程序..."
             chmod +x scripts/download_binaries.sh
-            ./scripts/download_binaries.sh "${TARGET_VER}"
-            echo "${TARGET_VER}" > shared/version
-            sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" qpkg.cfg
+            ./scripts/download_binaries.sh "${CORE_VER}"
+            echo "${CORE_VER}" > shared/version
           else
-            echo "版本 ($TARGET_VER) 与本地一致且二进制完备，直接使用现有二进制打包。"
+            echo "基础核心程序 (v${CORE_VER}) 与本地完备，直接使用现有二进制打包。"
           fi
 
       - name: Build QPKG Packages
@@ -158,6 +169,7 @@ jobs:
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/x86_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="x86_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
+          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" build_pkg/qpkg.cfg
           (cd build_pkg && qbuild --build-dir ../release)
           
           # 2. 构建 arm_64 架构包
@@ -172,6 +184,7 @@ jobs:
           chmod +x build_pkg/package_routines build_pkg/shared/easytier.sh build_pkg/shared/easytierconfig build_pkg/arm_64/* || true
           sed -i 's/^QPKG_DIR=.*/QPKG_DIR="arm_64"/' build_pkg/qpkg.cfg
           sed -i 's/^QPKG_NAME=.*/QPKG_NAME="easytier"/' build_pkg/qpkg.cfg
+          sed -i "s/^QPKG_VER=.*/QPKG_VER=\"${TARGET_VER}\"/" build_pkg/qpkg.cfg
           (cd build_pkg && qbuild --build-dir ../release)
           rm -rf build_pkg
 
@@ -183,21 +196,23 @@ jobs:
           echo "构建完成制品列表："
           ls -lh
 
-      - name: Publish or Update GitHub Release
+      - name: Publish GitHub Release
         if: steps.version_check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ steps.version_check.outputs.target_version }}"
-          name: "EasyTier QPKG v${{ steps.version_check.outputs.target_version }}"
+          tag_name: "${{ steps.version_check.outputs.tag_name }}"
+          name: "EasyTier QPKG ${{ steps.version_check.outputs.tag_name }}"
           draft: false
           prerelease: false
           files: |
             release/*.qpkg
             release/*.qpkg.md5
           body: |
-            ### 威联通 QNAP EasyTier 原生插件发布 (v${{ steps.version_check.outputs.target_version }})
+            ### 威联通 QNAP EasyTier 原生插件发布 (${{ steps.version_check.outputs.tag_name }})
             
-            基于 EasyTier **v${{ steps.version_check.outputs.target_version }}** 核心自动构建交付。
+            - **基础核心版本**：EasyTier `v${{ steps.version_check.outputs.target_version }}`
+            - **构建触发源**：`${{ github.event_name }}`
+            - **提交哈希**：`${{ github.sha }}`
             
             #### 📦 安装包下载
             - `easytier_${{ steps.version_check.outputs.target_version }}_x86_64.qpkg`（适用于 Intel / AMD 架构 NAS）
