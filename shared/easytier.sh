@@ -209,24 +209,44 @@ case "$1" in
         "$DAEMON_SCRIPT" >/dev/null 2>&1 &
     fi
 
-    # 检测服务启用状态 (enabled)，若为 0 则遵循用户停止意图，不拉起核心网络服务
-    IS_ENABLED="1"
+    # 开机自启动偏好检查 (独立拨动开关 autostart，默认为 1)
+    AUTOSTART="1"
     if [ -f "$CONFIG_JSON" ]; then
-        CONF_ENABLED=$(grep -o '"enabled"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_JSON" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
-        [ -n "$CONF_ENABLED" ] && IS_ENABLED="$CONF_ENABLED"
+        CONF_AUTOSTART=$(grep -o '"autostart"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_JSON" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ')
+        [ -n "$CONF_AUTOSTART" ] && AUTOSTART="$CONF_AUTOSTART"
     fi
 
-    if [ "$IS_ENABLED" = "0" ]; then
-        log_sys "EasyTier 当前状态为已停止 (enabled: 0)，跳过拉起核心网络进程，仅常驻 WebUI 后台守护。"
-        echo "$QPKG_NAME is stopped by user configuration (enabled: 0). Core service skipped."
+    rm -f "$QPKG_ROOT/configs/.action_signal" "$QPKG_ROOT/shared/configs/.action_signal" 2>/dev/null
+
+    if [ "$AUTOSTART" = "0" ]; then
+        # 开机自启禁用：将 enabled 置为 0，防止守护进程盲目保活，等待用户通过 Web 控制台手动唤醒
+        if [ -f "$CONFIG_JSON" ]; then
+            sed -i 's/"enabled"[[:space:]]*:[[:space:]]*1/"enabled": 0/g' "$CONFIG_JSON" 2>/dev/null
+        fi
+        if [ -f "$SYS_PERSIST_DIR/easytier.conf" ]; then
+            sed -i 's/"enabled"[[:space:]]*:[[:space:]]*1/"enabled": 0/g' "$SYS_PERSIST_DIR/easytier.conf" 2>/dev/null
+        fi
+        log_sys "开机自启动已设为禁用 (autostart: 0)，跳过拉起核心网络进程，仅常驻 WebUI 后台守护。"
+        echo "$QPKG_NAME is stopped on boot by autostart setting (autostart: 0). Core service skipped."
         exit 0
     fi
 
-    # 启动核心服务进程
-    if [ -f "$CONFIG_TOML" ]; then
-        eval "\"$CORE_BIN\" -c \"$CONFIG_TOML\" $CUSTOM_ARGS >> \"$LOG_FILE\" 2>&1 &"
-    else
-        eval "\"$CORE_BIN\" -d $CUSTOM_ARGS >> \"$LOG_FILE\" 2>&1 &"
+    # 系统级自启保障：恢复 enabled 状态为 1，确保守护进程持续保活
+    if [ -f "$CONFIG_JSON" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*0/"enabled": 1/g' "$CONFIG_JSON" 2>/dev/null
+    fi
+    if [ -f "$SYS_PERSIST_DIR/easytier.conf" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*0/"enabled": 1/g' "$SYS_PERSIST_DIR/easytier.conf" 2>/dev/null
+    fi
+
+    # 启动核心服务进程（若未在运行）
+    CURRENT_CORE_PID=$(pidof easytier-core)
+    if [ -z "$CURRENT_CORE_PID" ]; then
+        if [ -f "$CONFIG_TOML" ]; then
+            eval "\"$CORE_BIN\" -c \"$CONFIG_TOML\" $CUSTOM_ARGS >> \"$LOG_FILE\" 2>&1 &"
+        else
+            eval "\"$CORE_BIN\" -d $CUSTOM_ARGS >> \"$LOG_FILE\" 2>&1 &"
+        fi
     fi
 
     log_sys "EasyTier 服务已成功启动"

@@ -471,6 +471,7 @@ switch ($action) {
         $defaultHost = getNASHostname();
         $defaultConfig = [
             'enabled' => 1,
+            'autostart' => 1,
             'instance_name' => $defaultHost,
             'ipv4' => '',
             'dhcp' => true,
@@ -532,13 +533,33 @@ switch ($action) {
         $corePid = trim(shell_exec('pidof easytier-core 2>/dev/null') ?? '');
         $isCurrentlyRunning = !empty($corePid);
 
-        // 如果服务当前未运行，保持 enabled=0 且 change=0，绝不触发自启
-        $finalEnabled = $isCurrentlyRunning ? (!empty($input['enabled']) ? 1 : 0) : 0;
+        // 仅在服务运行时触发后台平滑重启 (change=1)；未运行时保存配置但不触发自启 (change=0)
+        // 保留原配置或默认 enabled=1 偏好，杜绝因当前未运行而将开机自启标记覆写为 0
+        $existingEnabled = 1;
+        if (file_exists($configFile)) {
+            $prevData = json_decode(file_get_contents($configFile), true);
+            if (is_array($prevData) && isset($prevData['enabled'])) {
+                $existingEnabled = intval($prevData['enabled']);
+            }
+        }
+        $finalEnabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : $existingEnabled;
+        
+        // 开机自启动偏好持久化 (默认为 1)
+        $existingAutostart = 1;
+        if (file_exists($configFile)) {
+            $prevData = json_decode(file_get_contents($configFile), true);
+            if (is_array($prevData) && isset($prevData['autostart'])) {
+                $existingAutostart = intval($prevData['autostart']);
+            }
+        }
+        $finalAutostart = isset($input['autostart']) ? (!empty($input['autostart']) ? 1 : 0) : $existingAutostart;
+
         $needChange = $isCurrentlyRunning ? '1' : '0';
 
         // 参数安全过滤与格式化
         $cleanConfig = [
             'enabled' => $finalEnabled,
+            'autostart' => $finalAutostart,
             'instance_name' => $cleanInst,
             'ipv4' => trim($input['ipv4'] ?? ''),
             'dhcp' => isset($input['dhcp']) ? !empty($input['dhcp']) : true,
@@ -594,6 +615,35 @@ switch ($action) {
         }
 
         echo json_encode(['success' => true, 'message' => $restartMessage]);
+        break;
+
+    case 'set_autostart':
+        $raw = file_get_contents('php://input');
+        $input = json_decode($raw, true);
+        if (!is_array($input) || !isset($input['autostart'])) {
+            echo json_encode(['success' => false, 'message' => '缺少必要的 autostart 参数']);
+            exit;
+        }
+
+        $autostartVal = !empty($input['autostart']) ? 1 : 0;
+        $sysPersistDir = '/etc/config/easytier';
+
+        if (file_exists($configFile)) {
+            $confData = json_decode(file_get_contents($configFile), true);
+            if (is_array($confData)) {
+                $confData['autostart'] = $autostartVal;
+                atomicWrite($configFile, json_encode($confData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+                // 同步写入系统级永久目录，保证重启后偏好不丢失
+                if (!is_dir($sysPersistDir)) {
+                    @mkdir($sysPersistDir, 0755, true);
+                }
+                @copy($configFile, $sysPersistDir . '/easytier.conf');
+            }
+        }
+
+        $statusText = ($autostartVal === 1) ? '开机自启动已开启' : '开机自启动已关闭';
+        echo json_encode(['success' => true, 'message' => $statusText, 'autostart' => $autostartVal]);
         break;
 
     case 'service_control':

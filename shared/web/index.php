@@ -175,6 +175,14 @@ $assetVer = file_exists(__DIR__ . '/static/logo.png') ? filemtime(__DIR__ . '/st
                 <div class="status-indicator-box">
                     <span class="pulse-dot status-dot-stopped" id="headerStatusDot"></span>
                     <span class="status-text" id="headerStatusText">检测中...</span>
+                    <span class="status-divider"></span>
+                    <div class="autostart-control" title="设置系统开机或重启时是否自动运行 EasyTier">
+                        <span class="autostart-label">开机自启</span>
+                        <label class="switch switch-sm">
+                            <input type="checkbox" id="autostart_switch" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                 </div>
                 <div class="action-buttons">
                     <button class="btn btn-outline" id="btnRefresh" title="刷新状态">

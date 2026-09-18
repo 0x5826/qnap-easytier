@@ -257,6 +257,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             updateIpModeUI();
 
+            // 开机自启动开关
+            const autostartEl = document.getElementById('autostart_switch');
+            if (autostartEl) {
+                autostartEl.checked = (c.autostart !== 0 && c.autostart !== false);
+            }
+
             document.getElementById('network_name').value = c.network_name || '';
             document.getElementById('network_secret').value = c.network_secret || '';
             document.getElementById('peers').value = (c.peers || []).join('\n');
@@ -298,8 +304,12 @@ document.addEventListener('DOMContentLoaded', () => {
             .map(s => s.trim())
             .filter(Boolean);
 
+        const autostartEl = document.getElementById('autostart_switch');
+        const autostartVal = autostartEl ? (autostartEl.checked ? 1 : 0) : 1;
+
         const payload = {
-            enabled: isServiceRunning ? 1 : 0,
+            enabled: 1,
+            autostart: autostartVal,
             instance_name: document.getElementById('instance_name').value.trim(),
             dhcp: ipModeDhcp.checked,
             ipv4: document.getElementById('ipv4').value.trim(),
@@ -377,6 +387,38 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchStatus();
         showToast('状态已刷新');
     });
+
+    // 顶栏开机自启动开关独立事件监听
+    const autostartSwitch = document.getElementById('autostart_switch');
+    if (autostartSwitch) {
+        autostartSwitch.addEventListener('change', async (e) => {
+            const isChecked = e.target.checked;
+            const targetVal = isChecked ? 1 : 0;
+            autostartSwitch.disabled = true;
+
+            try {
+                const res = await apiFetch('api.php?action=set_autostart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ autostart: targetVal })
+                });
+                const json = await res.json();
+                if (json.success) {
+                    showToast(json.message || (isChecked ? '开机自启动已开启' : '开机自启动已关闭'));
+                } else {
+                    showToast(json.message || '设置失败', true);
+                    // 失败回退状态
+                    autostartSwitch.checked = !isChecked;
+                }
+            } catch (err) {
+                showToast('网络请求失败：' + err.message, true);
+                autostartSwitch.checked = !isChecked;
+            } finally {
+                autostartSwitch.disabled = false;
+            }
+        });
+    }
+
 
     // 日志处理
     async function fetchLogs() {
