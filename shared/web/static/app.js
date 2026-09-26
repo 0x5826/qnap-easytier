@@ -113,13 +113,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             updateSaveButtons();
 
-            // 动态更新顶栏版本号
+            // 动态更新顶栏核心版本与构建插件版本
             if (d.version) {
                 const match = String(d.version).match(/(\d+\.\d+(?:\.\d+)?)/);
                 const cleanVer = match ? match[1] : '2.6.4';
                 const verEl = document.getElementById('headerVersion');
                 if (verEl) {
                     verEl.textContent = `v${cleanVer}`;
+                }
+            }
+            if (d.build_version) {
+                const buildEl = document.getElementById('headerBuildVersion');
+                if (buildEl) {
+                    let bVer = String(d.build_version).trim();
+                    if (!bVer.startsWith('v')) {
+                        bVer = `v${bVer}`;
+                    }
+                    buildEl.textContent = bVer;
+                    buildEl.style.display = 'inline-block';
                 }
             }
 

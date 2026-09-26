@@ -111,6 +111,7 @@ pkg_post_install()
 	# 4. 固化 QPKG 元数据配置，确保 QTS 与 Qmanager 手机 App 正确展示分类与作者
 	if [ -x "/sbin/setcfg" ]; then
 		/sbin/setcfg easytier Category "Utilities" -f /etc/config/qpkg.conf 2>/dev/null
-		/sbin/setcfg easytier Author "Dante" -f /etc/config/qpkg.conf 2>/dev/null
+		/sbin/setcfg easytier Author "Dante | 简介：基于 Rust 的去中心化 Mesh VPN | 开源：https://github.com/EasyTier/EasyTier" -f /etc/config/qpkg.conf 2>/dev/null
+		/sbin/setcfg easytier Summary "一款基于 Rust 开发的简单、安全、去中心化 Mesh VPN 异地组网方案。" -f /etc/config/qpkg.conf 2>/dev/null
 	fi
 }

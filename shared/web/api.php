@@ -193,6 +193,7 @@ switch ($action) {
             'running' => $running,
             'pid' => $pid,
             'version' => '',
+            'build_version' => '',
             'dev_name' => 'et0',
             'ipv4' => '',
             'peers' => [],
@@ -232,6 +233,21 @@ switch ($action) {
             } else {
                 $state['version'] = '2.6.4';
             }
+        }
+
+        // 解析构建插件版本信息 (包含构建日期)
+        $buildVerFile = $baseDir . '/build_version';
+        if (file_exists($buildVerFile)) {
+            $state['build_version'] = trim(file_get_contents($buildVerFile));
+        } elseif (file_exists('/etc/config/qpkg.conf') && is_executable('/sbin/getcfg')) {
+            $qpkgVer = trim(shell_exec('/sbin/getcfg easytier Version -f /etc/config/qpkg.conf 2>/dev/null') ?? '');
+            if (!empty($qpkgVer)) {
+                $state['build_version'] = $qpkgVer;
+            }
+        }
+        if (empty($state['build_version'])) {
+            $coreClean = !empty($state['version']) ? $state['version'] : '2.6.4';
+            $state['build_version'] = $coreClean . '-' . date('Ymd');
         }
 
         if ($running) {
