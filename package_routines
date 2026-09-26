@@ -107,4 +107,10 @@ pkg_post_install()
 	chmod +x "$target_path/arm_64/easytier-core" "$target_path/arm_64/easytier-cli" 2>/dev/null
 	chmod +x "$target_path/easytier-core" "$target_path/easytier-cli" 2>/dev/null
 	chmod -s "$target_path/x86_64/easytier-core" "$target_path/arm_64/easytier-core" "$target_path/easytier-core" 2>/dev/null
+
+	# 4. 固化 QPKG 元数据配置，确保 QTS 与 Qmanager 手机 App 正确展示分类与作者
+	if [ -x "/sbin/setcfg" ]; then
+		/sbin/setcfg easytier Category "Utilities" -f /etc/config/qpkg.conf 2>/dev/null
+		/sbin/setcfg easytier Author "Dante" -f /etc/config/qpkg.conf 2>/dev/null
+	fi
 }
