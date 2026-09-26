@@ -166,7 +166,7 @@ $assetVer = file_exists(__DIR__ . '/static/logo.png') ? filemtime(__DIR__ . '/st
             <div class="header-left">
                 <img src="static/logo.png?v=<?= $assetVer ?>" alt="EasyTier" class="official-logo" width="38" height="38">
                 <div class="title-meta">
-                    <h1>EasyTier <span class="badge-version" id="headerVersion" title="EasyTier 核心版本">v2.6.4</span> <span class="badge-build" id="headerBuildVersion" title="插件构建版本">v2.6.4-20260926</span></h1>
+                    <h1>EasyTier <span class="badge-version" id="headerVersion">v2.6.4-20260926</span></h1>
                     <span class="app-subtitle">去中心化网状 VPN 控制台</span>
                 </div>
             </div>
